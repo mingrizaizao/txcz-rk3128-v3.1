@@ -31,9 +31,9 @@
     
 https://github.com/mingrizaizao/batocera.linux
 
-
+* Ubuntu 24.04.3 LTS，这是我用的版本
 * 大概要占用 100G 左右的硬盘空间
-* 戴尔灵越笔记本编译了大概 20 多个小时
+* 戴尔灵越 7591 笔记本编译了大概 20 多个小时
 
 
 ```
