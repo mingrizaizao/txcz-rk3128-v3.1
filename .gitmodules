@@ -1,0 +1,3 @@
+[submodule "batocera.linux"]
+	path = batocera.linux
+	url = https://github.com/mingrizaizao/batocera.linux.git
