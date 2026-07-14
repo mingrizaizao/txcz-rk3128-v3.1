@@ -31,6 +31,26 @@
     
 https://github.com/mingrizaizao/batocera.linux
 
+```
+编译指令：
+
+git clone \
+    --branch batocera41-txcz-rk3128-v3-1 \
+    --single-branch \
+    --depth 1 \
+    git@github.com:mingrizaizao/batocera.linux.git
+
+cd batocera.linux
+
+git submodule update --init --recursive
+
+docker build \
+-t batoceralinux/batocera.linux-build:latest \
+.
+
+make rk3128-build
+```
+
 ### 编译好的：
 
 https://github.com/mingrizaizao/batocera.linux/releases/tag/batocera-rk3128-txcz-rk3128-v3-1-41-20260712
