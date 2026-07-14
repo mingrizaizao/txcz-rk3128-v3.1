@@ -31,7 +31,13 @@
     
 https://github.com/mingrizaizao/batocera.linux
 
+
+* 大概要占用 100G 左右的硬盘空间
+* 戴尔灵越笔记本编译了大概 20 多个小时
+
+
 ```
+
 编译指令：
 
 git clone \
