@@ -60,9 +60,8 @@ make rk3128-build
 ```
 
 ### 编译好的：
-
-这个版本的打包错了，是之前的一个测试版本，正在打包新版本（原来的版本是测试版本，现象是不管打开哪个游戏都会自动打开2048那个游戏，而且边框没有装饰图片）
-~~[https://github.com/mingrizaizao/batocera.linux/releases/tag/batocera-rk3128-txcz-rk3128-v3-1-41-20260712](https://github.com/mingrizaizao/batocera.linux/releases/tag/batocera-rk3128-txcz-rk3128-v3-1-41-20260712)~~
+这是新的，上个版本有问题：
+https://github.com/mingrizaizao/batocera.linux/releases/tag/batocera-rk3128-txcz-rk3128-v3-1-41-20260715
 
 这里面两个文件
     
