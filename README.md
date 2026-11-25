@@ -122,7 +122,7 @@ https://gitee.com/mingrizaizao/openwrt/releases/tag/v1.0.0
 
   我使用的是 **RKDevTool v2.96**。
 
-- ** openwrt-rockchip-armv7-txcz_rk3128-v3-1-squashfs-sysupgrade.img.gz**
+- **openwrt-rockchip-armv7-txcz_rk3128-v3-1-squashfs-sysupgrade.img.gz**
 
   openwrt 系统镜像。
 
