@@ -1,0 +1,1470 @@
+musl 是什么？
+Linux 系统可以简单理解为下面这几层：
+┌───────────────────────────────┐
+│ 应用程序                       │
+│ Shell、BusyBox、网络服务等     │
+├───────────────────────────────┤
+│ C 语言运行库 libc              │
+│ musl 或 glibc                  │
+├───────────────────────────────┤
+│ Linux 内核                     │
+│ 内存管理、进程调度、驱动等     │
+├───────────────────────────────┤
+│ RK3128 硬件                    │
+└───────────────────────────────┘
+
+
+
+查看串口：
+ls /dev/ttyUSB*
+
+
+启动串口调试：
+sudo picocom -b 115200 /dev/ttyUSB0
+
+退出picocom串口调试：
+Ctrl+A
+Ctrl+X
+
+
+这是batocera的打包镜像配置（镜像中各个分区结构）
+cat board/batocera/rockchip/rk3128/txcz-rk3128-v3-1/genimage.cfg
+
+                    RK3128 SD Card
+┌────────────────────────────────────────────┐
+│ 0                                          │
+│                                            │
+│ Reserved                                   │
+│                                            │
+├──────────── 32K ───────────────────────────┤
+│ idbloader.img                              │
+│                                            │
+├──────────── 8M ────────────────────────────┤
+│ uboot-txcz-rk3128-v3-1.img                │
+│                                            │
+├──────────── 12M ───────────────────────────┤
+│ trust.img                                  │
+│                                            │
+├──────────── 16M ───────────────────────────┤
+│                                            │
+│ FAT32                                      │
+│ 3 GiB                                      │
+│                                            │
+│ Batocera boot files                        │
+│ Kernel                                     │
+│ DTB                                        │
+│ extlinux / boot script                     │
+│                                            │
+├──────────── 3 GiB + 16M ──────────────────┤
+│                                            │
+│ ext4                                       │
+│ 512M（这个 genimage.cfg）                  │
+│                                            │
+│ userdata                                   │
+│                                            │
+└────────────────────────────────────────────┘
+
+通过这个脚本可以确定启动分区是怎么创建的，也就是boot的fat分区包含哪些内容：
+cat board/batocera/rockchip/rk3128/txcz-rk3128-v3-1/create-boot-script.sh
+
+MMC
+│
+├─ 32 KiB
+│   └─ idbloader.img
+│
+├─ 8 MiB
+│   └─ uboot-txcz-rk3128-v3-1.img
+│
+├─ 12 MiB
+│   └─ trust.img
+│
+├─ 16 MiB
+│   └─ FAT32 boot partition
+│       ├─ boot/
+│       │   ├─ linux              ← zImage
+│       │   ├─ initrd.lz4
+│       │   ├─ batocera.update    ← rootfs.squashfs
+│       │   └─ rk3128-xxx.dtb
+│       │
+│       └─ extlinux/
+│           └─ extlinux.conf
+│
+└─ 后面
+    └─ EXT4 userdata
+
+
+
+    cat board/batocera/rockchip/rk3128/txcz-rk3128-v3-1/boot/extlinux.conf
+
+RK3128 BootROM / iLoader
+        ↓
+MMC 上的 U-Boot
+        ↓
+U-Boot distro boot
+        ↓
+FAT32 分区
+        │
+        ├── /boot/linux
+        │       └── RK3128 Linux 4.4 zImage
+        │
+        ├── /boot/rk3128-txcz-rk3128-v3-1.dtb
+        │       └── 板级设备树
+        │
+        ├── /boot/initrd.lz4
+        │       └── initramfs
+        │
+        └── /boot/extlinux/extlinux.conf
+                ↓
+        Linux Kernel
+                ↓
+        initrd.lz4
+                ↓
+        Batocera 用户空间 / rootfs
+
+
+所以现在可以把之前那个比较复杂的：
+
+bootrkp → kernel 分区 → resource → parameter → rootfs
+
+从 OpenWrt 首版方案中暂时排除。
+
+你的实际可用启动链是标准得多的：
+
+U-Boot
+  ↓
+mmc1
+  ↓
+FAT
+  ↓
+extlinux.conf
+  ↓
+zImage + DTB + initrd
+
+
+
+
+
+Kernel
+ ↓
+initrd.lz4
+ ↓
+Batocera initramfs 逻辑
+ ↓
+找到 BATOCERA 数据
+ ↓
+启动真正的用户空间
+
+
+从实际运行的batocera中可以看到挂在情况
+
+RK3128
+│
+├── rknand0      约 7.3 GiB
+│                  └── 瑞芯微 NAND，当前 Batocera 没有从这里挂载根文件系统
+│
+└── mmcblk0      30 GiB
+    │
+    ├── p1       3 GiB
+    │            FAT32
+    │            LABEL=BATOCERA
+    │            挂载到 /boot
+    │
+    └── p2       27 GiB
+                 ext4
+                 LABEL=SHARE
+                 挂载到 /userdata
+
+
+
+batocera启动连
+
+U-Boot
+   │
+   ↓
+mmcblk0p1
+   │
+   ├── extlinux/extlinux.conf
+   │
+   ├── linux
+   │
+   ├── rk3128-txcz-rk3128-v3-1.dtb
+   │
+   └── initrd.lz4
+            │
+            ↓
+       Batocera init
+            │
+            ↓
+      /boot/boot/batocera
+            │
+            ↓
+        SquashFS
+            │
+            ↓
+        OverlayFS
+            │
+            ↓
+             /
+
+
+也就是说：
+
+Kernel
+ ↓
+initrd.lz4
+ ↓
+Batocera init
+ ↓
+根据 label=BATOCERA
+寻找 Batocera 系统
+
+所以我们如果改成普通 OpenWrt rootfs，最简单的办法是：
+
+Kernel
+ ↓
+root=/dev/mmcblk0p2
+ ↓
+EXT4
+ ↓
+/sbin/init
+ ↓
+OpenWrt
+
+
+
+MMC
+│
+├── bootloader 区
+│   ├── idbloader.img
+│   ├── uboot.img
+│   └── trust.img
+│
+├── mmcblk0p1
+│   └── FAT32
+│       ├── boot/
+│       │   ├── linux
+│       │   └── rk3128-txcz-rk3128-v3-1.dtb
+│       │
+│       └── extlinux/
+│           └── extlinux.conf
+│
+└── mmcblk0p2
+    └── EXT4
+        └── OpenWrt rootfs
+
+
+
+目标变成：
+“利用 OpenWrt build system 构建 ARMv7 OpenWrt rootfs，然后塞进现有 RK3128 Linux 4.4 启动链。”
+
+
+
+编译：
+编译工具链：
+make toolchain/compile -j$(nproc)
+
+编译包：
+make package/compile -j$(nproc)
+make package/install -j$(nproc)
+
+
+
+查看变量的赋值结果：
+make -pn 2>/dev/null | grep 'toolchain/stamp-compile'
+
+
+mingrizaizao@mingrizaizao-Inspiron-7591:~/openwrt$ make -pn 2>/dev/null | grep 'toolchain/stamp-compile'
+toolchain/stamp-compile := /home/mingrizaizao/openwrt/staging_dir/toolchain-aarch64_generic_gcc-14.3.0_musl/stamp/.toolchain_compile
+        @+/home/mingrizaizao/openwrt/scripts/timestamp.pl -n $(toolchain/stamp-compile) toolchain /home/mingrizaizao/openwrt/staging_dir/toolchain-aarch64_generic_gcc-14.3.0_musl/stamp/.gcc_final_installed || make --no-print-directory $(toolchain/flags-compile) toolchain/compile
+        @mkdir -p $$(dirname $(toolchain/stamp-compile))
+        @touch $(toolchain/stamp-compile)
+toolchain/stamp-compile/clean: FORCE
+        @rm -f $(toolchain/stamp-compile)
+
+
+
+在kernel的makefile里定义这两个变量，可以指定特定版本的交叉编译器
+KERNEL_CC?=$(TARGET_CC)
+KERNEL_CROSS?=$(TARGET_CROSS)
+
+
+
+cd ~/openwrt/bin/targets/rockchip/armv7
+
+dd if=/dev/zero of=openwrt-rk3128-rootfs.ext4 bs=1M count=64
+
+mkfs.ext4 -F openwrt-rk3128-rootfs.ext4
+
+mkdir -p rootfs-mnt
+
+sudo mount -o loop openwrt-rk3128-rootfs.ext4 rootfs-mnt
+
+sudo tar -xzf \
+openwrt-rockchip-armv7-txcz_rk3128-v3-1-targz-rootfs.tar.gz \
+-C rootfs-mnt
+
+sync
+sudo umount rootfs-mnt
+
+rm -rf rootfs-ext4
+
+
+mksquashfs rootfs batocera -comp gzip
+
+
+
+# [  221.430349] random: nonblocking pool is initialized
+/new_root/lib/ld-musl-armhf.so.1 \
+  >     --library-path /new_root/lib:/new_root/usr/lib \
+ >     /new_root/sbin/init
+[  253.604992] init: Failed to start kmodloader: No such file or directory
+[  253.614593] init: - preinit -
+[  253.618345] init: Failed to create sentinel file: No such file or directory
+[  253.618696] init: Failed to start plugd: No such file or directory
+/bin/sh: can't open '/etc/preinit': No such file or directory
+
+
+
+initramfs-base-files.txt
+
+
+重新打包ramfs
+sudo ls
+
+cd ~/initrd-root
+
+sudo find . -print0 \
+ | LC_ALL=C sort -z \
+ | sudo cpio --null -o \
+        -H newc \
+        --owner=0:0 \
+ > ../ramdisk.new
+
+lz4 -l -f ~/ramdisk.new ~/initrd.lz4
+
+
+
+
+查看u盘
+ lsblk -o NAME,SIZE,TYPE,MODEL,MOUNTPOINTS
+
+ 卸载分区
+ sudo umount /dev/sda1
+sudo umount /dev/sda2
+
+解压烧录
+sudo gzip -dc ~/batocera-rk3128-txcz-rk3128-v3-1-41-20260715.img.gz | sudo dd of=/dev/sda bs=4M status=progress conv=fsync
+
+
+
+
+mkdir -p /tmp/run
+/sbin/ubusd -s /tmp/run/ubus.sock &
+
+ubus -S /tmp/run/ubus.sock list
+
+
+mkdir -p /tmp/run
+exec /sbin/init
+
+
+
+
+
+
+
+
+
+/lib/ld-musl-armhf.so.1 \
+    --library-path /boot:/lib:/usr/lib \
+    /boot/test_libubus
+
+
+
+
+
+
+
+
+
+mount -o remount,rw /boot
+mount | grep '/boot'
+echo hello > /boot/TEST_PERSIST
+sync
+
+
+
+
+
+/var/run/ubus/ubus.sock
+
+
+
+mkdir -p /tmp/run/ubus
+/sbin/ubusd -s /tmp/run/ubus/ubus.sock &
+
+
+
+
+
+mount -o remount,rw /boot
+mount | grep '/boot'
+
+(
+    while true
+    do
+        {
+            echo "===== $(date) ====="
+            ps
+            echo "--- sockets ---"
+            find /var/run /run /tmp -type s -name '*ubus*' -ls 2>/dev/null
+            echo "--- ubus dir ---"
+            ls -la /var/run/ubus 2>&1
+            echo
+        } >> /boot/ubus-debug.txt
+        sync
+        sleep 5
+    done
+) &
+
+
+exec /sbin/init &
+
+
+
+
+
+mount -o remount,rw /boot
+mount | grep '/boot'
+/boot/test-ubus.sh &
+exec /sbin/init
+
+
+mount -o remount,rw /boot
+cat /boot/ubus-test.txt
+
+
+
+[  917.785338] procd:  MAJOR=246
+[  917.788378] procd:  MINOR=2
+[  917.791300] procd:  DEVNAME=usbmon2
+[  917.794861] procd:  SEQNUM=923
+[  917.798275] procd: {"ACTION":"add","DEVPATH":"/devices/platform/101e0000.usb/usbmon/usbmon3","SUBSYSTEM":"usbmon","MAJOR":"246","MINOR":"3","DEVNAME":"usbmon3","SEQNUM":"924"}
+[  917.814184] procd: Command: makedev
+[  917.817747] procd:  /dev/usbmon3
+[  917.821087] procd:  0600
+[  917.823694] procd: Message:
+[  917.826558] procd:  ACTION=add
+[  917.829686] procd:  DEVPATH=/devices/platform/101e0000.usb/usbmon/usbmon3
+[  917.836583] procd:  SUBSYSTEM=usbmon
+[  917.840227] procd:  MAJOR=246
+[  917.843315] procd:  MINOR=3
+[  917.846178] procd:  DEVNAME=usbmon3
+[  917.849736] procd:  SEQNUM=924
+[  918.353907] procd: Coldplug complete
+[  918.357574] procd: Change state 1 -> 2
+[  918.368238] procd: - ubus -
+[  918.371389] procd: Create service ubus
+[  918.375467] procd: Start instance ubus::instance1
+[  918.380920] procd: Started instance ubus::instance1[249]
+[  918.386466] procd: running /etc/init.d/ubus running
+[  918.391772] procd: glob failed on /etc/init.d/ubus
+[  918.422052] procd: Connection to ubus failed
+[  918.526680] procd: Connection to ubus failed
+[  918.731424] procd: Connection to ubus failed
+[  919.137452] procd: Connection to ubus failed
+[  919.942861] procd: Connection to ubus failed
+[  920.949565] procd: Connection to ubus failed
+[  921.956326] procd: Connection to ubus failed
+[  922.963083] procd: Connection to ubus failed
+[  923.969779] procd: Connection to ubus failed
+[  924.976553] procd: Connection to ubus failed
+[  925.983327] procd: Connection to ubus failed
+
+
+
+
+
+
+cd ~/openwrt
+
+staging_dir/toolchain-arm_cortex-a7_gcc-14.3.0_musl_eabi/bin/arm-openwrt-linux-muslgnueabi-gcc \
+    /tmp/test_unix_connect.c \
+    -o /tmp/test_unix_connect
+
+
+
+
+
+
+mount -o remount,rw /boot
+chmod +x /boot/test_libubus
+
+rm -f /tmp/run/ubus.sock
+mkdir -p /tmp/run
+
+/sbin/ubusd -s /tmp/run/ubus.sock &
+sleep 1
+
+ps | grep '[u]busd'
+ls -l /tmp/run/ubus.sock
+
+
+
+
+
+
+
+
+
+mount -o remount,rw /boot
+chmod +x /boot/test_libubus
+
+rm -f /tmp/run/ubus.sock
+mkdir -p /tmp/run
+
+/sbin/ubusd -s /tmp/run/ubus.sock &
+sleep 1
+
+ps | grep '[u]busd'
+ls -l /tmp/run/ubus.sock
+
+
+
+
+export STAGING_DIR="$PWD/staging_dir"
+
+staging_dir/toolchain-arm_cortex-a7_gcc-14.3.0_musl_eabi/bin/arm-openwrt-linux-muslgnueabi-gcc \
+    /tmp/test_libubus.c \
+    -I staging_dir/target-arm_cortex-a7_musl_eabi/usr/include \
+    -L staging_dir/target-arm_cortex-a7_musl_eabi/usr/lib \
+    -lubus \
+    -lubox \
+    -o /tmp/test_libubus
+
+
+
+
+
+
+
+
+
+mount -o remount,rw /boot
+chmod +x /boot/test_libubus
+
+rm -f /tmp/run/ubus.sock
+mkdir -p /tmp/run
+
+/sbin/ubusd -s /tmp/run/ubus.sock &
+sleep 1
+
+ps | grep '[u]busd'
+ls -l /tmp/run/ubus.sock
+
+
+
+/lib/ld-musl-armhf.so.1 \
+    --library-path /boot:/lib:/usr/lib \
+    /boot/test_libubus
+
+
+
+~ # sleep 30
+cat /proc/sys/kernel/random/entropy_avail
+
+
+启动网络：
+ip link set eth0 up
+ip addr add 192.168.50.2/24 dev eth0 
+
+启动ssh
+mkdir -p /var/lock
+mkdir -p /dev/pts
+mount -t devpts devpts /dev/pts
+#/etc/init.d/dropbear start
+dropbear -E -F -R
+
+
+客户端删除旧的ssh-key
+ssh-keygen -f '/home/mingrizaizao/.ssh/known_hosts' -R '192.168.50.2'
+
+链接ssh
+ssh root@192.168.50.2
+
+
+
+
+
+
+mkdir -p /tmp/run
+rm -f /tmp/run/ubus.sock
+/sbin/ubusd -s /tmp/run/ubus.sock
+
+
+
+
+重启后，打开ssh的整套流程
+ip link set eth0 up
+ip addr add 192.168.50.2/24 dev eth0 
+mkdir -p /var/lock
+mkdir -p /dev/pts
+mount -t devpts devpts /dev/pts
+#/etc/init.d/dropbear start
+dropbear -E -F -R
+
+
+客户端
+ssh-keygen -f '/home/mingrizaizao/.ssh/known_hosts' -R '192.168.50.2'
+ssh root@192.168.50.2
+
+
+
+给板子传文件：
+scp -O \
+build_dir/target-arm_cortex-a7_musl_eabi/ubus-2026.06.28~24864e78/ubusd \
+root@192.168.50.2:/tmp/ubusd-debug
+
+
+重新启动usbd
+killall ubusd-debug
+rm -f /tmp/run/ubus.sock
+mkdir /tmp/run
+/tmp/ubusd-debug -s /tmp/run/ubus.sock
+
+
+测试ubus
+
+/lib/ld-musl-armhf.so.1 \
+    --library-path /boot:/lib:/usr/lib \
+    /boot/test_libubus
+
+
+
+
+
+
+mkdir -p /boot_root
+mount -o ro LABEL=BATOCERA /boot_root
+echo "mount exit=$?"
+ls -la /boot_root
+ls -la /boot_root/boot
+
+
+mkdir -p /boot_root
+mount -o ro /dev/mmcblk0p1 /boot_root
+echo "mount exit=$?"
+ls -la /boot_root
+ls -la /boot_root/boot
+
+
+测试initramfs 挂载sd卡
+
+mkdir -p /tmp/test
+mount -o ro /dev/mmcblk0p1 /tmp/test
+echo "mount exit code=$?"
+
+ls -la /tmp/test
+ls -la /tmp/test/boot
+
+
+
+
+mkdir -p /boot_root /new_root /overlay_root /sys /proc
+mount -t proc  -o nodev,noexec,nosuid proc  /proc 
+mount -t sysfs -o nodev,noexec,nosuid sysfs /sys 
+mount -t devtmpfs none /dev
+
+mkdir -p /boot_root
+mount -t vfat -o ro LABEL=BATOCERA /boot_root
+echo "mount exit=$?"
+ls -la /boot_root
+ls -la /boot_root/boot
+
+
+
+
+mkdir -p /boot_root /new_root /overlay_root /sys /proc
+mount -t proc  -o nodev,noexec,nosuid proc  /proc 
+mount -t sysfs -o nodev,noexec,nosuid sysfs /sys 
+mount -t devtmpfs none /dev
+
+mkdir -p /boot_root
+mount -t vfat -o ro /dev/mmcblk0p1 /boot_root
+echo "mount exit=$?"
+ls -la /boot_root
+ls -la /boot_root/boot
+
+
+
+
+
+
+xxd -l 4096 /boot_root/boot/batocera
+
+
+
+
+
+
+1. 挂载 SquashFS
+
+mkdir -p /test_squash /test_overlay
+mount -t squashfs -o ro /boot_root/boot/batocera /test_squash
+echo "squashfs_exit=$?"
+ls /test_squash
+
+
+2. 挂载 OverlayFS
+
+mount -t tmpfs -o size=64M tmpfs /test_overlay
+mkdir -p /test_overlay/upper /test_overlay/work /test_overlay/root
+
+mount -t overlay overlay \
+  -o lowerdir=/test_squash,upperdir=/test_overlay/upper,workdir=/test_overlay/work \
+  /test_overlay/root
+
+echo "overlay_exit=$?"
+ls /test_overlay/root
+
+
+
+kernel版本：
+rockchip-linux的版本：
+root@OpenWrt:~# uname -a
+Linux OpenWrt 6.12.69+ #6 SMP Tue Oct 27 13:48:55 CST 2026 armv7l GNU/Linux
+
+
+
+
+
+
+openwrt 中关于kernel配置相关的文件
+配置文件	相关内容
+target/linux/generic/config-6.12	# CONFIG_ARCH_MULTI_V7 is not set、# CONFIG_ARCH_ROCKCHIP is not set
+target/linux/rockchip/armv7/config-default	CONFIG_ARCH_MULTI_V7=y
+target/linux/rockchip/rk3128/config-6.12	CONFIG_ARCH_MULTI_V7=y
+
+
+
+
+
+编译kernel:
+make target/linux/clean
+make target/linux/compile V=s
+
+
+make package/kernel/mac80211/compile -j1 V=s 2>&1 | tee ~/mac80211-build.log
+
+grep -E '^(CONFIG_(CFG80211|MAC80211)=|# CONFIG_(CFG80211|MAC80211) is not set)'     "$KERNEL_DIR/.config"
+
+cd ~/openwrt
+
+make kernel_oldconfig
+
+
+
+
+IMAGE/sysupgrade.img.gz = boot-common | boot-script $$(BOOT_SCRIPT) | pine64-img | gzip | append-metadata
+
+
+define Build/boot-script
+    mkimage -A arm -O linux -T script -C none -a 0 -e 0 \
+        -d $(if $(1),$(1),default).bootscript $@.boot/boot.scr
+endef
+
+
+gcc-linaro-6.3.1-2017.05-x86_64_arm-linux-gnueabihf.tar.xz 下载：
+https://developer.arm.com/Downloads/-/Legacy%20Linaro%20GNU%20Toolchains
+
+
+设置uboot的工具链环境变量
+export ARCH=arm
+export CROSS_COMPILE="$HOME/gcc-linaro-6.3.1-2017.05-x86_64_arm-linux-gnueabihf/bin/arm-linux-gnueabihf-"
+
+
+
+测试uboot包下载
+make package/boot/uboot-rockchip/download V=s
+
+
+make package/boot/uboot-rockchip/prepare V=s
+
+make package/boot/uboot-rockchip/configure V=s
+
+
+
+测试uboot的 gcc 交叉编译工具链 toolchain
+make package/devel/linaro-gcc-6.3.1/clean
+make package/devel/linaro-gcc-6.3.1/host/compile V=s
+
+make package/devel/linaro-gcc-6.3.1/host/compile V=s -j1
+
+
+make package-metadata
+
+
+
+
+
+# 第一步：生成 idbloader.img 初始文件
+mkimage -n rk3128 -T rksd -d \
+    rk3128_ddr_300MHz_v2.12.bin \
+    idbloader.img
+
+# 第二步：追加 miniloader
+cat rk3128x_miniloader_v2.57.bin >> idbloader.img
+
+
+
+cd ~/openwrt
+
+make package/boot/rkbin/compile -j1 V=s
+
+
+
+cd ~/openwrt
+
+make target/linux/install -j1 V=s
+
+
+uboot启动脚本
+boot.scr
+
+
+有两种常见情况。
+文件	作用	谁执行
+extlinux.conf	描述内核、DTB、initrd 和启动参数	U-Boot 的 extlinux/sysboot
+boot.scr	U-Boot 命令脚本，通常由 boot.cmd 编译生成	U-Boot
+
+
+
+
+pine64-img
+
+
+烧录内存卡：
+lsblk -o NAME,SIZE,MODEL,TRAN,FSTYPE,MOUNTPOINTS
+
+
+cd ~/openwrt
+
+FILE=bin/targets/rockchip/armv7/openwrt-rockchip-armv7-txcz_rk3128-v3-1-squashfs-sysupgrade.img.gz
+
+sudo umount /dev/sda1 2>/dev/null || true
+sudo umount /dev/sda2 2>/dev/null || true
+
+gzip -dc "$FILE" | sudo dd of=/dev/sda bs=4M status=progress conv=fsync
+
+sync
+
+
+
+下载：
+make package/boot/uboot-rockchip/download V=s
+make tools/mkimage/download V=s
+
+
+
+
+
+
+
+生成镜像：
+cd ~/openwrt
+
+export PATH="$PWD/staging_dir/host/bin:$PATH"
+export SOURCE_DATE_EPOCH="$(git log -1 --format=%ct)"
+
+make -j1 -C target/linux/rockchip/image \
+    TOPDIR="$PWD" \
+    SUBTARGET=armv7 \
+    install-images V=s
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+version
+printenv kernel_addr_r
+printenv fdt_addr_r
+printenv loadaddr
+printenv bootcmd
+printenv boot_targets
+
+
+
+
+
+
+
+
+
+
+
+
+更新kernel版本后编译
+make target/linux/install -j$(nproc)
+make target/install -j$(nproc)
+make -j$(nproc)
+
+
+
+
+
+
+从头编译：
+----------------------------------------------
+安装环境：
+sudo apt update
+
+sudo apt install -y \
+  build-essential clang flex bison g++ gawk gcc-multilib \
+  g++-multilib gettext git libncurses-dev libssl-dev \
+  python3 python3-setuptools python3-dev rsync swig unzip \
+  zlib1g-dev file wget curl time \
+  libelf-dev libdw-dev libcap-dev \
+  cpio ecj fastjar java-propose-classpath \
+  libgmp3-dev libmpc-dev libmpfr-dev \
+  libxml-parser-perl libyaml-dev xsltproc \
+  qemu-utils mkisofs
+
+
+下载源码：
+cd ~
+
+git clone \
+  --branch rk3128-dev \
+  --single-branch \
+  git@github.com:mingrizaizao/openwrt.git \
+  openwrt
+
+cd ~/openwrt
+
+
+
+安装依赖：
+cd ~/openwrt
+
+./scripts/feeds update -a
+./scripts/feeds install -a
+
+
+#配置：
+cd ~/openwrt
+cp txcz-rk3128-v3-1.config .config
+make defconfig
+
+
+
+#下载：#编译：
+# make download -j8
+make -j$(nproc) V=s
+
+
+#查看镜像：
+find bin/targets/rockchip/armv7/ -maxdepth 1 -type f -printf '%f\n'
+
+
+
+
+烧录内存卡：
+lsblk -o NAME,SIZE,MODEL,TRAN,FSTYPE,MOUNTPOINTS
+
+
+cd ~/openwrt
+
+ls -l bin/targets/rockchip/armv7/openwrt-rockchip-armv7-txcz_rk3128-v3-1-squashfs-sysupgrade.img.gz
+
+FILE=bin/targets/rockchip/armv7/openwrt-rockchip-armv7-txcz_rk3128-v3-1-squashfs-sysupgrade.img.gz
+
+sudo umount /dev/sda1 2>/dev/null || true
+sudo umount /dev/sda2 2>/dev/null || true
+
+gzip -dc "$FILE" | sudo dd of=/dev/sda bs=4M status=progress conv=fsync
+
+sync
+
+--------------------------------------------------------------------------
+
+
+
+
+
+
+
+2. 目前还存在的几个问题
+系统已经启动，但从日志看，还有一些硬件和配置问题需要后续处理。
+问题	日志表现	当前判断
+有线网卡	no phy found	PHY 未识别，网络接口无法正常工作
+CPU 调频	failed to get cpu0 reg	CPU regulator 未配置或未识别
+RK808 PMIC	failed to read the chip id	I2C 设备通信失败
+F2FS	mkfs.f2fs: not found	缺少 F2FS 格式化工具
+U-Boot 环境	/etc/fw_env.config 不存在	尚未配置环境变量访问
+无线监管数据库	regulatory.db failed	缺少监管数据库文件
+
+另外：
+mount_root: no usable overlay filesystem found, using tmpfs overlay
+
+
+这意味着本次启动使用了临时内存 Overlay，重启后运行期间的配置修改可能丢失。这个问题值得优先处理。
+
+
+
+#保存.config的改动
+--------------------------------------------------------------
+cd ~/openwrt-test
+
+./scripts/diffconfig.sh > txcz-rk3128-v3-1.config
+
+
+
+
+更新设备树dts后编译
+------------------------------------------------
+cd ~/kernel
+make ARCH=arm dtbs
+
+
+
+
+
+
+修改内核的配置文件
+-----------------------------------------------------
+~/openwrt/target/linux/rockchip/armv7/config-6.12
+
+修改内核配置文件后编译
+make target/linux/clean
+make target/linux/compile V=s
+make V=s
+
+
+
+
+--------------------------------------
+backport
+package/kernel/mac80211
+
+
+
+
+
+#先停止wifi
+wifi down
+
+#卸载模块
+rmmod esp8089
+
+#检查模块
+lsmod | grep esp8089
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+#启动wifi
+uci set wireless.default_radio0.disabled='0'
+uci commit wireless
+wifi reload
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+问题：
+你当前 kernel 和 al177 的差异主要在最后一步：
+
+- 当前 kernel：`ieee80211_tx_status_irqsafe()`
+- al177：`ieee80211_tx_status()`   这俩有啥区别，双方的 `sip_write_pkts()`都没有将 SDIO 写入错误向 `sip_txq_process()` 返回，那是不是可以加个日志打印，吧错误状态打印出来。
+
+
+
+
+
+
+#查看日志
+
+logread -f
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+原厂属性	对应引脚	声明用途
+WIFI,poweren_gpio	GPIO0_D6	Wi-Fi 使能/电源使能控制
+WIFI,host_wake_irq	GPIO0_A2	Wi-Fi 芯片唤醒主机
+
+
+
+
+通过 /etc/modprobe.d/ 配置。
+options esp8089 esp_reset_gpio=5
+
+
+
+
+
+
+
+
+
+
+sip_tx_data_pkt_enqueue
+sip_trigger_txq_process
+
+
+
+
+
+
+
+
+
+
+
+
+#重新编译esp8089源码
+
+#重新编译：
+cd ~/openwrt
+make target/linux/compile -j1 V=s
+
+#打包apk
+cd ~/openwrt
+make package/kernel/linux/compile V=s
+
+
+#传输apk测试：
+cd ~/openwrt
+ls -l bin/targets/rockchip/armv7/packages/kmod-esp8089-6.12.69-r1.apk 
+scp -O ~/openwrt/bin/targets/rockchip/armv7/packages/kmod-esp8089-6.12.69-r1.apk root@192.168.1.1:/tmp/
+
+安装apk:
+ssh root@192.168.1.1
+apk add --allow-untrusted --no-network /tmp/kmod-esp8089-6.12.69-r1.apk
+reboot
+
+
+
+
+
+
+
+
+
+
+
+修改备份：
+/home/mingrizaizao/openwrt/build_dir/target-arm_cortex-a7_musl_eabi/linux-rockchip_armv7/linux-github_com_mingrizaizao_kernel_rockchip_git-73f9833a095559e21b2bb56b8ccc6b4bc71dfa1e/drivers/net/wireless/esp8089/esp_mac80211.c
+
+
+
+
+al177 移植到这里了
+build_dir/target-arm_cortex-a7_musl_eabi/linux-rockchip_armv7/linux-github_com_mingrizaizao_kernel_rockchip_git-73f9833a095559e21b2bb56b8ccc6b4bc71dfa1e/drivers/net/wireless/esp8089/esp_init.c
+
+
+
+
+移植esp8089参考驱动
+https://github.com/TinkerBoard/debian_kernel/blob/8bb796b3eff3bc0fcc89406f9f83fd9a224b7526/drivers/net/wireless/rockchip_wlan/esp8089/esp_driver/sdio_stub.c
+搜索关键词：#define ESP8089_DRV_VERSION "2.25"               #define ESP8089_DRV_VERSION "2.26"
+https://github.com/bbor74/linux-3.4-sunxi/blob/4d73d5a4d8d441c2852e48eac905771d81342b94/drivers/net/wireless/esp8089/Makefile
+下边这个文件配置的参数很重要，需要逐项核对，可以参考文档：https://www.scribd.com/document/517179971/esp8089-driver-release-desc-v1-9-2-english?utm_source=chatgpt.com
+build_dir/target-arm_cortex-a7_musl_eabi/linux-rockchip_armv7/linux-github_com_mingrizaizao_kernel_rockchip_git-73f9833a095559e21b2bb56b8ccc6b4bc71dfa1e/drivers/net/wireless/esp8089/esp_conf.h 
+这个很重要，需要增加一个esp_premalloc文件
+https://github.com/hanwckf/linux-rk3328/blob/4d539f0568f1cea3caae2ace51878e03a9136b25/drivers/net/wireless/rockchip_wlan/esp8089/esp_premalloc/README
+
+
+
+
+写入 /sys/class/rkwifi/driver 会启动 ESP8089
+
+
+
+
+
+变更旧版本的枚举值
+IEEE80211_NUM_BANDS   ->    NUM_NL80211_BANDS
+
+
+NL80211_BAND_2GHZ
+
+subsys_initcall
+
+新：
+NUM_NL80211_BANDS
+NL80211_BAND_2GHZ
+
+旧：
+IEEE80211_NUM_BANDS
+IEEE80211_BAND_2GHZ
+
+
+
+
+#打包内核镜像
+
+cd ~/openwrt
+make target/linux/compile -j1 V=s
+make target/linux/install V=s -j1
+make target/install V=s -j1
+
+
+
+
+
+打包kernel镜像：
+cd ~/openwrt
+KERNEL_TARGET="$PWD/build_dir/target-arm_cortex-a7_musl_eabi/linux-rockchip_armv7/txcz_rk3128-v3-1-kernel.bin"
+make -C target/linux/rockchip/image \
+    TOPDIR="$PWD" \
+    "$KERNEL_TARGET"
+
+
+
+
+#镜像位置 kernel.img
+#这三个文件一样
+build_dir/target-arm_cortex-a7_musl_eabi/linux-rockchip_armv7/txcz_rk3128-v3-1-kernel.bin
+build_dir/target-arm_cortex-a7_musl_eabi/linux-rockchip_armv7/tmp/openwrt-rockchip-armv7-txcz_rk3128-v3-1-squashfs-sysupgrade.img.gz.boot/kernel.img
+build_dir/target-arm_cortex-a7_musl_eabi/linux-rockchip_armv7/tmp/openwrt-rockchip-armv7-txcz_rk3128-v3-1-ext4-sysupgrade.img.gz.boot/kernel.img
+
+scp -O /tmp/txcz-kernel.img root@192.168.1.1:/tmp/kernel.img.new
+touch /root/write-test
+rm /root/write-test
+
+
+
+echo "========== 1. 重新挂载为可写 =========="
+mount -o remount,rw /mnt/boot
+
+mount | grep mmcblk0p1
+
+echo "========== 2. 替换 kernel.img =========="
+cp /tmp/kernel.img.new /mnt/boot/kernel.img
+
+sync
+
+echo "========== 3. 检查新内核 =========="
+ls -lh /mnt/boot/kernel.img
+sha256sum /mnt/boot/kernel.img
+sha256sum /tmp/kernel.img.new
+
+
+sync
+mount -o remount,ro /mnt/boot
+
+echo "========== 最终启动分区 =========="
+ls -lh /mnt/boot
+
+echo "========== 新内核哈希 =========="
+sha256sum /mnt/boot/kernel.img
+
+echo "========== 备份是否存在 =========="
+ls -lh /root/kernel.img.before-esp8089
+
+
+sync
+reboot
+
+
+
+
+uname -a
+
+dmesg | grep -iE 'esp8089|esp_sdio|esp_init|firmware|mmc|sdio'
+
+iw dev
+
+
+
+
+
+
+esp8089的驱动需要依赖rfkill，然后需要依赖下边的设备树节点
+	wireless-wlan {
+		compatible = "wlan-platdata";
+		wifi_chip_type = "esp8089";
+		sdio_vref = <0x0>;
+		WIFI,poweren_gpio = <0x71 0x1e 0x0>;
+		WIFI,host_wake_irq = <0x71 0x2 0x0>;
+		status = "okay";
+	};
+
+
+
+
+
+
+
+
+
+
+
+6.12版本设备树对应名称：
+
+"WIFI,poweren-gpios"
+"WIFI,vbat-gpios"
+"WIFI,reset-gpios"
+"WIFI,host_wake-gpios"
+
+
+
+
+.wake_tx_queue = ieee80211_handle_wake_tx_queue,
+
+
+
+
+
+
+
+
+
+
+
+1.build_dir/target-arm_cortex-a7_musl_eabi/linux-rockchip_armv7/linux-github_com_mingrizaizao_kernel_rockchip_git-73f9833a095559e21b2bb56b8ccc6b4bc71dfa1e/drivers/net/wireless/esp8089/esp_driver/esp_mac80211.c
+
+static const struct ieee80211_ops esp_mac80211_ops = {  中添加：
+
+.add_chanctx
+.remove_chanctx
+.change_chanctx
+.assign_vif_chanctx
+.unassign_vif_chanctx
+
+
+
+
+
+
+
+
+
+
+# 修改无线模式
+uci set wireless.default_radio0.mode='sta'
+
+# 指定目标 Wi-Fi
+uci set wireless.default_radio0.ssid='ChinaNet-D8C97B'
+uci set wireless.default_radio0.bssid='34:36:54:d8:c9:7b'
+
+# WPA2-PSK + AES
+uci set wireless.default_radio0.encryption='psk2'
+
+# 在这里填写你自己的 Wi-Fi 密码
+uci set wireless.default_radio0.key='zhaolimei0516'
+
+# 删除原来的 LAN 网络绑定，暂时只测试无线连接
+uci delete wireless.default_radio0.network
+
+# STA 模式使用自动信道
+uci set wireless.radio0.channel='auto'
+
+# 启用无线接口
+uci set wireless.default_radio0.disabled='0'
+
+# 保存配置
+uci commit wireless
+
+
+
+
+
+
+
+
+
+
+
+
+iw phy
+
+//增加 wlan0 接口
+iw phy phy0 interface add wlan0 type managed
+ip link set wlan0 up
+iw dev
+
+
+iw dev
+iw dev wlan0 scan
+iw dev wlan0 link
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+开启ap热点：
+uci set wireless.radio0.channel='6'
+uci set wireless.radio0.htmode='HT20'
+
+uci set wireless.default_radio0.mode='ap'
+uci set wireless.default_radio0.ssid='ESP8089-Test'
+uci set wireless.default_radio0.encryption='psk2'
+uci set wireless.default_radio0.key='esp8089test123'
+
+uci delete wireless.default_radio0.bssid
+uci set wireless.default_radio0.network='lan'
+uci set wireless.default_radio0.disabled='0'
+
+uci commit wireless
