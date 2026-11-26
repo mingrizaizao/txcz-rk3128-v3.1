@@ -169,7 +169,9 @@ make rk3128-build
 ### 编译好的：
 
 https://github.com/mingrizaizao/batocera.linux/releases/tag/batocera-rk3128-txcz-rk3128-v3-1-41-20260715
+
 或者 
+
 https://pan.baidu.com/s/1WtNKsrpAGXMx8epWZmMO4w 提取码: mrzz
 
 这里面两个文件
